@@ -25,6 +25,11 @@ DSH Web 客户端插件:把多角色扮演(narrator)的回复渲染成**每个�
 
 未匹配该格式的回复自动降级为普通气泡。
 
+## 示例
+
+<img width="878" height="868" alt="image" src="https://github.com/user-attachments/assets/11f19525-ab14-4cfd-a6bc-9584abc0d5e4" />
+
+
 ## 安装到 profile
 
 ```sh
