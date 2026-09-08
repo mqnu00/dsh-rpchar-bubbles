@@ -7,8 +7,9 @@ DSH Web 客户端插件:把多角色扮演(narrator)的回复渲染成**每个�
 ## 机制
 
 - 以 `priority: -1` 影子覆盖 `conversation.chat.node` slot 的 `assistant-step` 键(核心渲染器为默认优先级 0;同一键位最低优先级者生效,这是客户端 slot 的官方行为)。
-- 流式(running)阶段渲染为单个气泡原文,避免流式拼接闪烁;定型(settled)后按角色分隔格式拆分为多个气泡。
-- 运行时仅依赖统一基座播种的 `react`(零跨包运行时依赖),`/client` bundle 手写为官方 `window.__ModuleLoader__.load({ id, factory })` 惰性 CJS 格式。
+- 流式(running)阶段渲染为单个气泡的流式 markdown,避免流式拼接闪烁;定型(settled)后按角色分隔格式拆分为多个气泡。
+- 气泡文本(叙述/角色对话/降级气泡)一律经基座播种的 `MarkdownText`(`@deepseek-ai/dsh-client-ui-primitives`,与核心聊天同款)渲染,markdown 显示为渲染结果而非原文;代码块复制按钮文案跟随 `t` 标准 seat,缺席时用组件默认文案。
+- 运行时仅依赖统一基座播种的 `react` 与 `@deepseek-ai/dsh-client-ui-primitives`(均为 seed word,零跨包动态依赖),`/client` bundle 手写为官方 `window.__ModuleLoader__.load({ id, factory })` 惰性 CJS 格式。
 
 ## 依赖的角色回复格式(narrator 预设已按此输出)
 
@@ -36,15 +37,12 @@ DSH Web 客户端插件:把多角色扮演(narrator)的回复渲染成**每个�
 
 ```sh
 dsh plugin --profile rpchar-test add https://github.com/mqnu00/dsh-rpchar-bubbles.git
-# cordis.patch.yml 追加(insert 形式,普通 name 行不会新增条目):
-# - insert:
-#     - id: rpchar-bubbles
-#       name: 'rpchar-bubbles'
 ```
 
-本地开发时也可用 `file:` 安装(pnpm 软链到源码目录):
+本包声明了 `dsh.bundle.patch`(`cordis.patch.yml`,内含 insert 条目),`add` 会自动把插件挂进 profile 的 bundles layer,无需手动改 patch。`file:` 安装时 pnpm 会复制内容,重新 `add` 前(或 `remove` 后再 `add`)才能拿到源码新改动:
 
 ```sh
+dsh plugin --profile rpchar-test remove rpchar-bubbles
 dsh plugin --profile rpchar-test add file:/path/to/dsh-rpchar-bubbles
 ```
 
@@ -64,4 +62,5 @@ node test/parse.test.mjs   # 解析/取色单测(直接加载真实 bundle)
 
 ## 版本
 
+- `v0.1.1` — 气泡文本改经基座播种的 `MarkdownText` 渲染,markdown 显示渲染结果而非原文;声明 `dsh.bundle`,`dsh plugin add` 自动挂进 profile layer。
 - `v0.1.0` — 首个发布版:影子覆盖 `assistant-step` 渲染器,支持 narrator 🎭 分角色格式、稳定取名、降级与中断标记。

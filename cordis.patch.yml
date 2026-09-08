@@ -1,0 +1,8 @@
+# rpchar-bubbles bundle patch:把本插件的 host 半作为 cordis 条目挂进 profile。
+# client 半由 client-modules 扫描本包的 dsh.client 声明后进浏览器启动图,
+# 条目本身在这里以 insert 形式声明(id 即插件 id;name 按 profile 的
+# node_modules 解析,file: 安装时是软链,源码修改实时生效)。
+
+- insert:
+    - id: rpchar-bubbles
+      name: 'rpchar-bubbles'

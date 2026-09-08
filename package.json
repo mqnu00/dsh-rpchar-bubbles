@@ -1,6 +1,6 @@
 {
   "name": "rpchar-bubbles",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "多角色扮演独立气泡 UI:把 narrator 的 🎭 分角色回复渲染为各自独立的聊天气泡",
   "author": "mqnu00",
@@ -18,6 +18,9 @@
   "dsh": {
     "client": {
       "platform": "web"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
     }
   },
   "license": "MIT",
