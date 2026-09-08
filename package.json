@@ -1,0 +1,27 @@
+{
+  "name": "rpchar-bubbles",
+  "version": "0.1.0",
+  "private": true,
+  "description": "多角色扮演独立气泡 UI:把 narrator 的 🎭 分角色回复渲染为各自独立的聊天气泡",
+  "author": "mqnu00",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mqnu00/dsh-rpchar-bubbles.git"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "react": "*"
+  }
+}
