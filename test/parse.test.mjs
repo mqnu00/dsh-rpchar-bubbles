@@ -18,7 +18,14 @@ assert.equal(registration.id, 'rpchar-bubbles')
 
 // react 桩:测试只用到 parseSegments/colorOf,不需要真正的 react。
 const fakeReact = new Proxy({}, { get: (_t, key) => () => `react:${String(key)}` })
-const mod = registration.factory(() => fakeReact)
+// 记录 bundle 的 require 目标:markdown 渲染必须走基座播种的 primitives。
+const requiredSpecifiers = []
+const mod = registration.factory((spec) => {
+  requiredSpecifiers.push(spec)
+  return fakeReact
+})
+assert.ok(requiredSpecifiers.includes('@deepseek-ai/dsh-client-ui-primitives'),
+  'bundle must require the seeded @deepseek-ai/dsh-client-ui-primitives (MarkdownText) — raw text rendering regression')
 assert.ok(mod.__test, 'bundle must expose __test hook')
 const { parseSegments, colorOf } = mod.__test
 
@@ -88,5 +95,61 @@ assert.ok(!segs4[0].text.includes('直接开口') || segs4[0].text.includes('直
 assert.ok(typeof colorOf('Alice Thornwood') === 'string')
 assert.ok(colorOf('Alice Thornwood').startsWith('#'))
 assert.ok(colorOf('Alice Thornwood') !== colorOf('Bob Ironfist'), 'different names → different colors')
+
+// ── 渲染冒烟:气泡文本必须经 MarkdownText 渲染 ─────────────────────────
+
+const MARKDOWN_STUB = function MarkdownText() {}
+const renderReact = {
+  createElement: (type, props, ...children) => ({ type, props, children }),
+  Fragment: Symbol.for('react.fragment'),
+  useState: (init) => [init, () => {}],
+  memo: (fn) => fn,
+}
+const rmod = registration.factory((spec) => {
+  if (spec === 'react') return renderReact
+  if (spec === '@deepseek-ai/dsh-client-ui-primitives') return { MarkdownText: MARKDOWN_STUB }
+  throw new Error(`unexpected require: ${spec}`)
+})
+
+function collectMarkdown(el, out = [], depth = 0) {
+  if (el === null || el === undefined || typeof el !== 'object' || depth > 12) return out
+  if (Array.isArray(el)) {
+    for (const item of el) collectMarkdown(item, out, depth + 1)
+    return out
+  }
+  if (el.type === MARKDOWN_STUB) {
+    out.push(el.props)
+    return out
+  }
+  // 展开自定义组件(测试桩不执行真实 react,函数组件直接调用取子树)
+  let { children } = el
+  if (typeof el.type === 'function') children = [el.type(el.props)]
+  for (const child of children ?? []) collectMarkdown(child, out, depth + 1)
+  return out
+}
+
+const nodeOf = (status, text) => ({
+  node: { data: { blocks: [{ kind: 'text', text }], status } },
+  renderMessageImages: () => null,
+})
+
+// settled + 角色格式:叙述与角色气泡的正文都应为 MarkdownText 元素
+const settledView = rmod.__test.BubbleAssistantNodeView(nodeOf('settled', full))
+const settledMd = collectMarkdown(settledView)
+assert.ok(settledMd.length >= 3, 'narrator + 2 character bubbles all render markdown')
+assert.ok(settledMd.every((p) => p.streaming !== true), 'settled markdown must not be in streaming mode')
+assert.ok(settledMd.some((p) => p.text.includes('小酒馆')), 'narrator text routed through MarkdownText')
+assert.ok(settledMd.some((p) => p.text.includes('升华')), 'character text routed through MarkdownText')
+
+// running:流式 markdown
+const runningView = rmod.__test.BubbleAssistantNodeView(nodeOf('running', '流式中的 **加粗** 文本'))
+const runningMd = collectMarkdown(runningView)
+assert.ok(runningMd.length >= 1, 'streaming text renders markdown')
+assert.ok(runningMd.every((p) => p.streaming === true), 'running markdown must be in streaming mode')
+
+// t 缺席:codeLabels 允许为 undefined(组件内部有默认文案)
+assert.equal(rmod.__test.codeLabelsOf(undefined), undefined)
+const tStub = (key) => `t:${key}`
+assert.deepEqual(rmod.__test.codeLabelsOf(tStub), { copyLabel: 't:copy', copiedLabel: 't:copied' })
 
 console.log('✅ all rpchar-bubbles parse/color tests passed')
