@@ -1,8 +1,12 @@
 /**
- * rpchar-bubbles parse/color unit tests.
- * 加载真实 bundle(在 container 里直接取 __test 挂点),校验角色分隔解析。
+ * rpchar-bubbles parse/color/mixed-render unit tests.
+ *
+ * 加载真实 bundle(在 container 里直接取 __test 挂点)。
+ * 不依赖任何第三方包即可跑通;若环境里有 jsdom,会额外跑"浏览器解析器"那几组
+ * 端到端用例(HTML 的合法性由浏览器负责,所以那部分必须用真实 DOM 验)。
  */
 import { strict as assert } from 'node:assert'
+import { readFile } from 'node:fs/promises'
 
 let registration
 globalThis.window = {
@@ -12,6 +16,7 @@ globalThis.window = {
 }
 
 const bundleUrl = new URL('../lib/client.js', import.meta.url)
+const bundleSource = await readFile(bundleUrl, 'utf8')
 await import(bundleUrl.href)
 assert.ok(registration, 'bundle must register via window.__ModuleLoader__.load')
 assert.equal(registration.id, 'rpchar-bubbles')
@@ -88,11 +93,9 @@ const segs4 = parseSegments(headChar)
 assert.equal(segs4.length, 1)
 assert.equal(segs4[0].kind, 'character')
 assert.equal(segs4[0].name, 'C')
-assert.ok(!segs4[0].text.includes('直接开口') || segs4[0].text.includes('直接开口')) // 文本保留
+assert.ok(segs4[0].text.includes('直接开口'))
 
 // 6. 收尾分隔线粘在头行同一行(模型常见输出):必须仍识别为角色头
-//    例(真实会话 22:13 形态):
-//      🎭 **钱慈惜**（国际知名钢琴家）────────────────────────────────────────
 const gluedTail = [
   '你按下通话键，听筒里传来温柔带笑的女声：',
   '',
@@ -126,7 +129,6 @@ assert.equal(segs6[0].occupation, '古代语言学者')
 assert.ok(segs6[0].text.includes('升华'), 'dialogue kept, closing divider not included in text')
 
 // 8. 角色头后正文先出现、分隔线随后出现 → 分隔线是段边界,不得被当装饰线
-//    吞掉(吞掉会把后续叙述卷进角色气泡;修前 segs 只有 2 段,修后 3 段)
 const lateSep = [
   '开头叙述。',
   '---',
@@ -167,148 +169,284 @@ assert.equal(parseSegments(card), null, 'bold card header without 🎭 must not 
 assert.equal(parseSegments('**Alice Thornwood** (古代语言学者)\n你好。'), null,
   'header without 🎭 emoji degrades to plain bubble')
 
-// ── 块级 HTML 提取/净化(酒馆式渲染) ────────────────────────────────
+// ── 11. 旁白段空行必须保留(曾经被整段丢掉 → 多段落并成一个软换行段) ──
 
-const { splitHtmlParts, sanitizeHtml } = mod.__test
-
-// 11. 叙述文本 + <details> 状态面板:切成 text/html/text,面板内容完整保留
-const statusHtml = [
-  '你坐在床边，指尖还残留着方才点击卡面时那种酥麻的触电感。',
+const blankKeep = [
+  '第一段。',
   '',
-  '选择你的下一步行动：',
-  '1. 打开【任务】面板，查看并接取那个带红点的新任务。',
+  '第二段。',
   '',
-  '<details>',
-  '<summary><b><font color="#FFD700">【廖泽晖状态栏】</font></b></summary>',
-  '<div style="background-color:#1e1e1e; color:#ffffff; border-radius:10px; padding:15px;">',
-  '<ul style="list-style-type: none;"><li><b>姓名:</b> 廖泽晖</li></ul>',
-  '</div>',
-  '</details>',
-  '',
-  '窗外的天色渐渐染上橘红，那条通往河市的公路在地图上安静地亮着。',
+  '────────────────────────────────────────',
+  '🎭 **A** (甲)',
+  '────────────────────────────────────────',
+  '台词。',
 ].join('\n')
-const hp = splitHtmlParts(statusHtml)
-assert.ok(hp !== null, 'details panel must be extracted as html part')
-assert.equal(hp.length, 3, 'expect text + html + text')
-assert.equal(hp[0].kind, 'text')
-assert.ok(hp[0].text.includes('你坐在床边'), 'leading narration stays markdown text')
-assert.ok(!hp[0].text.includes('<details>'), 'panel not duplicated in text part')
-assert.equal(hp[1].kind, 'html')
-assert.ok(hp[1].html.startsWith('<details>'), 'html part starts at <details>')
-assert.ok(hp[1].html.includes('<font color="#FFD700">') && hp[1].html.includes('</details>'),
-  'nested inner tags preserved inside the html part')
-assert.equal(hp[2].kind, 'text')
-assert.ok(hp[2].text.includes('窗外的天色'), 'trailing narration stays markdown text')
+assert.equal(parseSegments(blankKeep)[0].text, '第一段。\n\n第二段。',
+  'narrator blank lines must survive (paragraph separation)')
 
-// 12. 代码围栏内的标签不参与提取;围栏原文留在文本块里
-const fenceHtml = '先说明。\n\n```html\n<div>围栏内的 div</div>\n```\n\n<details>\n<summary>状态</summary>\n</details>\n\n收尾。'
-const fp = splitHtmlParts(fenceHtml)
-assert.ok(fp !== null)
-assert.equal(fp.length, 3, 'fence content untouched, real panel still extracted')
-assert.ok(fp[0].kind === 'text' && fp[0].text.includes('```html') && fp[0].text.includes('围栏内的 div'),
-  'fenced html sample stays inside the markdown text part')
-assert.ok(fp[1].kind === 'html' && fp[1].html === '<details>\n<summary>状态</summary>\n</details>')
+// ── 纯函数:围栏切分 / dedent / 硬换行 ──────────────────────────────
 
-// 13. 行内标签(句中 <b>)不是块级 HTML → 不提取,整体退化为 markdown
-assert.equal(splitHtmlParts('他是 <b>最强</b> 的剑士。'), null, 'inline tags must not split')
-// 14. 未闭合的标签块 → 不提取(避免吞掉后半段正文)
-assert.equal(splitHtmlParts('<details>\n<summary>x</summary>\n后面的正文'), null, 'unclosed block must not split')
-// 15. 纯文本或只有空元素
-assert.equal(splitHtmlParts('普通文本，没有标签。'), null)
-assert.equal(splitHtmlParts('普通文本 <br> 一行。'), null, 'bare void tags alone are not blocks')
+const { splitFencedGroups, dedent, hardBreaks, setHardBreaks } = mod.__test
 
-// 16. 净化:删 script/style/iframe/form 整段、事件属性、javascript: 链接
-const dirty = '<script>alert(1)</script>前<style>body{}</style>中' +
-  '<div onclick="evil()" href="javascript:alert(2)">x<img src=x onerror=alert(3)></div>' +
-  '<iframe src="https://x"></iframe>后'
-const clean = sanitizeHtml(dirty)
-assert.ok(!/<\/?script/i.test(clean) && !/alert\(1\)/.test(clean), 'script element removed with its body')
-assert.ok(!/<\/?style/i.test(clean) && !/body\{\}/.test(clean), 'style element removed with its body')
-assert.ok(!/onclick|onerror/i.test(clean), 'event handler attributes removed')
-assert.ok(!/javascript\s*:/i.test(clean), 'javascript: scheme removed')
-assert.ok(!/<iframe/i.test(clean), 'iframe removed')
-assert.ok(clean.includes('<div') && clean.includes('>x<img src=x') && clean.endsWith('后'),
-  'benign structure kept')
-assert.ok(clean.includes('中'), 'text between stripped elements preserved')
+// 12. 代码围栏切成独立组(围栏里的 <tag> 只是代码,不能当 HTML 解析)
+const fg = splitFencedGroups('前\n```html\n<div>x</div>\n```\n后')
+assert.deepEqual(fg.map((g) => g.fence), [false, true, false], 'fence group split')
+assert.equal(fg[1].lines.join('\n'), '```html\n<div>x</div>\n```', 'fenced source kept verbatim')
 
-// ── 引用块内换行保真(人物卡档案这类整块引用被折叠成一段) ──────────────
+// 13. dedent:去掉公共前导空白(模型缩进 HTML 是常态,不然会被判成缩进代码块)
+assert.equal(dedent('\n        生命 12/12\n\n        金币 30\n\n      ').trim(), '生命 12/12\n\n金币 30')
+assert.equal(dedent('正文\n  第二行').trim(), '正文\n  第二行', 'relative indent preserved')
+assert.equal(dedent('无缩进'), '无缩进')
 
-const { hardBreakBlockquotes } = mod.__test
+// 14. hardBreaks:抄酒馆 simpleLineBreaks —— 相邻非空行之间补硬换行
+assert.equal(hardBreaks('第一段。\n第二段。'), '第一段。 \\\n第二段。', 'single newline becomes a hard break')
+assert.equal(hardBreaks('第一段。\n\n第二段。'), '第一段。\n\n第二段。', 'blank line unchanged (real paragraph)')
+assert.equal(hardBreaks('> a\n> b'), '> a \\\n> b', 'blockquote lines hard-broken (人物卡档案)')
+assert.equal(hardBreaks('- a\n- b'), '- a\n- b', 'list items untouched')
+assert.equal(hardBreaks('# 标题\n- a'), '# 标题\n- a', 'heading untouched')
+assert.equal(hardBreaks('| a | b |\n| - | - |'), '| a | b |\n| - | - |', 'table untouched')
+assert.equal(hardBreaks('```\na\nb\n```'), '```\na\nb\n```', 'fenced code untouched')
+assert.equal(hardBreaks('已带 \\\n下一行'), '已带 \\\n下一行', 'existing hard break not duplicated')
+setHardBreaks(false)
+assert.equal(hardBreaks('第一段。\n第二段。'), '第一段。\n第二段。', 'toggle can disable it')
+setHardBreaks(true)
 
-// 18. 连续 `>` 行、无空行 → 每行补硬换行;空 `>` 行(另起一段)不补
-const cardQuote = [
-  '> **【人物卡档案】**',
-  '> ───────────────',
-  '> 姓名：钱慈惜',
-  '> 稀有度：SR（超稀有级）',
-  '> 年龄：40',
-  '',
-  '> 新段落：xx',
-].join('\n')
-const hb = hardBreakBlockquotes(cardQuote)
-const hbLines = hb.split('\n')
-assert.ok(hbLines[0] === '> **【人物卡档案】** \\', 'first quote line gets a hard break')
-assert.ok(hbLines[2] === '> 姓名：钱慈惜 \\', 'consecutive quote lines all hard-broken')
-assert.ok(hbLines[4] === '> 年龄：40', 'line before a blank line keeps its soft end (paragraph ends)')
-assert.ok(hbLines[6] === '> 新段落：xx', 'new paragraph unaffected')
+// ── 属性净化(白名单,不再用正则黑名单) ─────────────────────────────
 
-// 19. 非引用文本不受影响;单行引用(下一行不是 `>`)不补
-assert.equal(hardBreakBlockquotes('普通段\n> 你好\n\n后续。'), '普通段\n> 你好\n\n后续。')
-// 20. 已带硬换行的引用行不重复补
-assert.equal(hardBreakBlockquotes('> a \\\n> b'), '> a \\\n> b')
+const { reactProps, safeStyle, safeUrl, tables } = mod.__test
 
-// ── 缩进/嵌套的 <details> 面板(游荡者 那条消息的真实形态) ─────────────
+// 15. 事件属性 / 危险协议 / 非白名单属性
+assert.equal(reactProps({ onclick: 'evil()' }).onclick, undefined, 'event handler dropped')
+assert.equal(reactProps({ onerror: 'evil()' }).onerror, undefined)
+assert.equal(reactProps({ href: 'javascript:alert(1)' }).href, undefined, 'javascript: href dropped')
+assert.equal(reactProps({ href: 'java&#x73;cript:alert(1)' }).href, undefined, 'entity-encoded javascript: dropped')
+assert.equal(reactProps({ href: 'java\tscript:alert(1)' }).href, undefined, 'whitespace-split javascript: dropped')
+assert.equal(reactProps({ src: 'data:text/html;base64,xx' }).src, undefined, 'data:text/html dropped')
+assert.equal(reactProps({ src: 'data:image/svg+xml;base64,xx' }).src, undefined, 'data:image/svg+xml dropped')
+assert.equal(reactProps({ src: 'data:image/png;base64,AA' }).src, 'data:image/png;base64,AA', 'data:image/png kept')
+assert.equal(reactProps({ 'data-x': '1' })['data-x'], undefined, 'non-whitelisted attribute dropped')
+assert.equal(reactProps({ class: 'card' }).className, 'card', 'class → className')
+assert.deepEqual(reactProps({ href: 'https://a.b' }).target, '_blank', 'links forced target=_blank')
 
-// 21. 面板内 `<ul><li>` 与嵌套 `<details>` 紧跟在前一行、且带前导空格缩进;
-//     此前 atLineStart 只看前一字符是否为换行,导致这些标签被丢出配平栈、
-//     外层 <details> 被内层 </details> 提前闭合,剩余内容以原文漏出。
-const nestedPanel = [
-  '前文。你心意已决。',
-  '',
-  '<br>',
-  '<details>',
-  '<summary><b><font color="#FF69B4">【在场其他人物】</font></b></summary>',
-  '<div style="background-color:#1e1e1e; color:#ffffff; padding:15px;">',
-  '      <ul>',
-  '        <li><details><summary><b><font color="#FFB6C1">人物A</font></b></summary>',
-  '          <div style="border-left: 2px solid #FFB6C1; margin-top: 10px;">',
-  '            <p><b>状态:</b> 非在场。</p>',
-  '            <p><b>位置:</b> 河市。</p>',
-  '          </div></details></li>',
-  '        <li><details><summary><b><font color="#FFB6C1">人物B</font></b></summary>',
-  '          <div style="border-left: 2px solid #FFB6C1;">',
-  '            <p><b>状态:</b> 敌方。</p>',
-  '            <p><b>位置:</b> 前方约20米。</p>',
-  '          </div></details></li>',
-  '      </ul>',
-  '</div>',
-  '</details>',
-  '',
-  '后文。天色已晚。',
-].join('\n')
-const np = splitHtmlParts(nestedPanel)
-assert.ok(np !== null)
-assert.equal(np.length, 4, 'expect text + <br> + panel + text')
-assert.equal(np[0].kind, 'text')
-assert.ok(np[0].text.includes('前文'), 'leading narration is markdown')
-assert.equal(np[1].kind, 'html')
-assert.equal(np[1].html, '<br>', 'standalone <br> rendered as its own html fragment, not raw text')
-assert.equal(np[2].kind, 'html')
-assert.equal(np[2].html.split('<details>').length - 1, 3, 'outer + 2 nested <details> all inside the panel')
-assert.equal(np[2].html.split('</details>').length - 1, 3, 'all </details> matched inside the same panel')
-assert.ok(np[2].html.includes('人物B') && np[2].html.includes('前方约20米'), 'second nested character fully kept')
-assert.ok(!np[2].html.includes('<li><details><summary><b>人物B'.replace('<summary>', '')), 'no unbalanced leftover')
-assert.equal(np[3].kind, 'text')
-assert.ok(np[3].text.includes('后文'), 'trailing narration is markdown')
+// 16. style 白名单
+assert.equal(safeStyle('position:fixed;color:red').position, undefined, 'position not allowed')
+assert.equal(safeStyle('position:fixed;color:red').color, 'red', 'benign property kept')
+assert.equal(safeStyle('display:ruby').display, undefined, 'unknown display value dropped')
+assert.equal(safeStyle('background:url(http://evil/x)').background, undefined, 'url() dropped')
+assert.equal(safeStyle('line-height:1.7').lineHeight, '1.7', 'camelCase conversion')
+assert.equal(safeUrl('vbscript:x'), undefined)
+assert.equal(safeUrl('mailto:a@b.c'), 'mailto:a@b.c')
 
-// 22. 面板后没有 <br>,只有面板与尾文:仍应只有 text+panel+text
-const simplePanel = '开头。\n\n<details>\n<summary>标题</summary>\n</details>\n\n末尾。'
-const sp = splitHtmlParts(simplePanel)
-assert.equal(sp.length, 3)
-assert.equal(sp[0].kind, 'text')
-assert.equal(sp[1].kind, 'html' && 'html')
-assert.ok(sp[1].html === '<details>\n<summary>标题</summary>\n</details>')
-assert.equal(sp[2].kind, 'text')
+// ── 片段拆分 / 渲染(用纯对象树,不需要 DOM) ────────────────────────
+
+const { splitParts, tokenFor } = mod.__test
+const el = (tag, attrs = {}, children = []) => ({
+  kind: 'element', tag, attrs, children, block: tables.INLINE_TAGS[tag] !== 1,
+})
+const tx = (value) => ({ kind: 'text', value })
+
+// 17. 块级槽位独占一行 → markdown / html / markdown 三段
+const blockParts = splitParts('前文\n' + tokenFor(0) + '\n后文', [el('details', {}, [tx('正文')])])
+assert.deepEqual(blockParts.map((p) => p.kind), ['markdown', 'html', 'markdown'])
+assert.equal(blockParts[1].node.tag, 'details')
+
+// 18. 行内槽位 → 整行合成一个行内混排片段(段落不会被拆开)
+const inlineParts = splitParts('他说 ' + tokenFor(0) + ' 好', [el('b', {}, [tx('x')])])
+assert.equal(inlineParts.length, 1, 'inline slot stays on its own line as one part')
+assert.equal(inlineParts[0].kind, 'inline')
+assert.deepEqual(inlineParts[0].items.map((i) => i.kind), ['markdown', 'html', 'markdown'])
+
+// 19. 白名单外标签保留内容、DROP_WHOLE 连内容一起丢
+const renderReact = {
+  // React 的 createElement:第三个参数之后的 children 会盖掉 props.children;
+  // 插件多数地方是 `createElement(tag, props)` + props.children,所以桩要两者都认。
+  createElement: (type, props, ...children) => ({
+    type,
+    props,
+    children: children.length > 0 ? children : [].concat(props?.children ?? []),
+  }),
+  Fragment: Symbol.for('react.fragment'),
+  useState: (init) => [init, () => {}],
+  memo: (fn) => fn,
+}
+const MARKDOWN_STUB = function MarkdownText() {}
+const rmod = registration.factory((spec) => {
+  if (spec === 'react') return renderReact
+  if (spec === '@deepseek-ai/dsh-client-ui-primitives') return { MarkdownText: MARKDOWN_STUB }
+  throw new Error(`unexpected require: ${spec}`)
+})
+
+function walk(el, out = [], depth = 0) {
+  if (el === null || el === undefined || typeof el !== 'object' || depth > 20) return out
+  if (Array.isArray(el)) { for (const item of el) walk(item, out, depth + 1); return out }
+  out.push(el)
+  let { children } = el
+  if (typeof el.type === 'function' && el.type !== MARKDOWN_STUB) children = [el.type(el.props)]
+  for (const child of children ?? []) walk(child, out, depth + 1)
+  return out
+}
+const typesOf = (tree) => walk(tree).map((e) => e.type)
+const markdownProps = (tree) => walk(tree).filter((e) => e.type === MARKDOWN_STUB).map((e) => e.props)
+const ctx = { codeLabels: undefined, streaming: false }
+// 渲染相关挂点必须取自 rmod(接真实桩的那份):mod 的 react 桩只返回字符串。
+const { renderElement, renderInline } = rmod.__test
+
+const tree = rmod.__test.renderElement(
+  el('div', { onclick: 'evil()' }, [
+    el('script', {}, [tx('alert(1)')]),
+    el('b', {}, [tx('粗体')]),
+    el('custom-thing', {}, [tx('保留内容')]),
+  ]), ctx, 'k')
+assert.ok(typesOf(tree).includes('b'), 'whitelisted tag rendered as a React element')
+assert.ok(!typesOf(tree).includes('script'), 'script dropped with its content')
+assert.ok(!typesOf(tree).includes('custom-thing'), 'unknown tag dropped')
+assert.ok(markdownProps(tree).some((p) => p.text.includes('保留内容')), 'unknown tag keeps its children')
+assert.equal(renderElement(el('div', {}, []), ctx, 'k').props.onclick, undefined, 'event props never passed')
+
+// 20. 元素内部的文本回到 MarkdownText(= 双模的关键一步),并带 dedent/hardBreaks
+const panel = rmod.__test.renderElement(
+  el('details', {}, [
+    el('summary', {}, [tx('状态')]),
+    el('div', {}, [tx('\n        生命 12/12\n\n        金币 30\n      ')]),
+  ]), ctx, 'k')
+const panelMd = markdownProps(panel)
+assert.ok(typesOf(panel).includes('details'), 'details rendered as a real React <details>')
+assert.ok(panelMd.some((p) => p.text.includes('生命 12/12')), 'panel body goes through MarkdownText')
+assert.ok(panelMd.every((p) => !p.text.startsWith(' ')), 'panel body dedented (no indent-code-block)')
+assert.ok(panelMd.some((p) => !p.text.includes('<div')), 'no raw tag text fed to markdown')
+
+// 21. 行内 markdown → React(行内容器里也能用)
+assert.ok(typesOf(rmod.__test.renderInline('a **b** c')).includes('strong'))
+assert.ok(typesOf(rmod.__test.renderInline('a `c` d')).includes('code'))
+
+// 22. 源码守卫:不再有任何 innerHTML 注入面
+assert.ok(!bundleSource.includes('dangerouslySetInnerHTML'),
+  'bundle must not use dangerouslySetInnerHTML (guard)')
+assert.ok(!/innerHTML\s*=/.test(bundleSource.replace(/template\.innerHTML/g, '')) ||
+  !/document\.createElement\('div'\)[\s\S]{0,80}innerHTML/.test(bundleSource),
+  'no HTML string injection besides the inert <template> parse')
+
+// ── 浏览器解析器端到端(有 jsdom 才跑) ─────────────────────────────
+
+let jsdom = null
+try {
+  jsdom = await import('jsdom')
+} catch {
+  console.log('ℹ️  未安装 jsdom:跳过"浏览器解析器"端到端用例(npm i -D jsdom 可启用)')
+}
+
+if (jsdom !== null) {
+  globalThis.document = new jsdom.JSDOM('').window.document
+  const { buildPseudo, htmlToTree, domToTree } = mod.__test
+
+  // 23. HTML 交给浏览器:大小写 / 未闭合 / 错配 / 无引号属性 / 实体 全部容错
+  const t1 = htmlToTree('<DETAILS><SUMMARY>x</SUMMARY>正文')
+  assert.equal(t1[0].tag, 'details', 'uppercase tag normalized by the browser')
+  assert.equal(t1[0].children[0].tag, 'summary', 'unclosed tags auto-closed by the browser')
+  const t2 = htmlToTree('<div style=line-height:1.7>a</div>')
+  assert.equal(t2[0].attrs.style, 'line-height:1.7', 'unquoted attribute parsed')
+  const t3 = htmlToTree('<b><i>x</b></i>')
+  assert.equal(t3[0].tag, 'b', 'misnested tags repaired by the browser')
+  assert.equal(t3[0].children[0].tag, 'i')
+
+  // 24. 面板正文里的 `---` / `🎭` 不再撕裂气泡(真实会话 c7a30426 的形态)
+  const panelText = [
+    '酒廊里油灯昏黄。',
+    '────────────────────────────────────────',
+    '🎭 **Bob Ironfist** (前军人)',
+    '────────────────────────────────────────',
+    '嗯。坐。',
+    '',
+    '<details><summary>世界资料 · 已激活</summary>',
+    '<div style="line-height:1.7">',
+    '',
+    '**Ashport**：分为三区。',
+    '',
+    '---',
+    '',
+    '🎭 **守钟人教会** (秘密组织)',
+    '',
+    '**钟塔**：每天二十九响。',
+    '',
+    '</div></details>',
+  ].join('\n')
+  const pseudo = buildPseudo(panelText)
+  assert.ok(!pseudo.text.includes('<details>'), 'HTML replaced by a placeholder before segment split')
+  assert.ok(!pseudo.text.includes('钟塔'), 'panel body stays out of the pseudo text')
+  assert.equal(pseudo.slots.length, 1, 'one block slot')
+  const segsP = parseSegments(pseudo.text)
+  assert.equal(segsP.length, 2, 'panel must NOT be torn by the inner --- / 🎭')
+  assert.equal(segsP[1].kind, 'character')
+  assert.ok(segsP[1].text.includes('\uE000RPH0\uE001'), 'placeholder carried into the segment')
+
+  // 25. 端到端:面板是真 <details>,正文回 markdown 管线,脚本被丢
+  const nodeOf = (status, text) => ({
+    node: { data: { blocks: [{ kind: 'text', text }], status } },
+    renderMessageImages: () => null,
+  })
+  const settled = rmod.__test.BubbleAssistantNodeView(nodeOf('settled', panelText))
+  assert.ok(typesOf(settled).includes('details'), 'settled view renders a real <details> panel')
+  assert.ok(typesOf(settled).includes('summary'), 'summary rendered as an element')
+  const settledMd = markdownProps(settled)
+  assert.ok(settledMd.some((p) => p.text.includes('**Ashport**')), 'panel body back on the markdown pipeline')
+  assert.ok(settledMd.some((p) => p.text.includes('**钟塔**')), 'second paragraph of the panel rendered')
+  assert.ok(!settledMd.some((p) => p.text.includes('<div')), 'no raw <div> text reaches markdown')
+  assert.ok(!typesOf(settled).includes('script'), 'script dropped')
+
+  const scripted = '前。\n<details><summary>x</summary><script>alert(1)</script>正文</details>\n后。'
+  const sv = rmod.__test.BubbleAssistantNodeView(nodeOf('settled', scripted))
+  assert.ok(!typesOf(sv).includes('script'), 'script inside a panel dropped')
+
+  // 26. 句中行内 HTML:渲染成真正的行内元素,不显示字面标签
+  const inlineView = rmod.__test.BubbleAssistantNodeView(nodeOf('settled',
+    '叙述。\n────────────────────────────────────────\n🎭 **A** (甲)\n────────────────────────────────────────\n他说 <b>轻一点</b>，然后灯灭了。'))
+  assert.ok(typesOf(inlineView).includes('b'), 'inline <b> in mid-sentence rendered as an element')
+  assert.ok(!markdownProps(inlineView).some((p) => p.text.includes('<b>')), 'no literal <b> text')
+
+  // 27. 代码围栏里的标签仍是源码(不被当 HTML)
+  const fenced = '说明。\n```html\n<details><summary>x</summary></details>\n```\n\n<details><summary>y</summary>真面板</details>'
+  const fv = buildPseudo(fenced)
+  assert.equal(fv.slots.length, 1, 'only the real panel is a slot; the fenced sample is not')
+  assert.ok(fv.text.includes('<details><summary>x</summary></details>'), 'fenced sample stays verbatim text')
+
+  // 27b. 行内代码里的标签同样只是源码(浏览器不知道那是 markdown 行内代码)
+  const inlineCode = buildPseudo('说明：`<details>` 是折叠标签，`<b>x</b>` 是粗体。')
+  assert.equal(inlineCode.slots.length, 0, 'inline code with tags must NOT become elements')
+  assert.ok(inlineCode.text.includes('`<details>`') && inlineCode.text.includes('`<b>x</b>`'),
+    'inline code preserved verbatim')
+  const mixedCode = buildPseudo('先 `a < b`，然后 <details><summary>s</summary>正文</details>')
+  assert.equal(mixedCode.slots.length, 1, 'real panel still extracted alongside inline code')
+  assert.ok(mixedCode.text.includes('`a < b`'), 'inline code kept when the line also has real HTML')
+
+  // 28. 流式期间不拆(增量文本里的标签还不完整)
+  const running = rmod.__test.BubbleAssistantNodeView(nodeOf('running', panelText))
+  assert.ok(!typesOf(running).includes('details'), 'streaming view must not emit panels yet')
+  assert.ok(markdownProps(running).every((p) => p.streaming === true), 'streaming stays a single markdown stream')
+
+  // 29. 无 DOM 环境降级:整段走 markdown(最多"少一个框",不会满屏尖括号)
+  const savedDocument = globalThis.document
+  delete globalThis.document
+  const noDom = buildPseudo('<details><summary>x</summary>\n\n正文\n\n</details>')
+  assert.equal(noDom.slots.length, 0, 'no DOM → no slots')
+  assert.ok(noDom.text.includes('<details>'), 'no DOM → text passed through untouched')
+  globalThis.document = savedDocument
+
+  // 30. 安全:实体编码的协议由浏览器解码后再校验(正则黑名单的经典绕过点)
+  const dirty = '前。\n<div class="x"><a href="java&#x73;cript:alert(1)">x</a>' +
+    '<img src="data:text/html;base64,AA" alt="i"><b>保留</b><script>alert(2)</script></div>\n后。'
+  const dirtyView = rmod.__test.BubbleAssistantNodeView(nodeOf('settled', dirty))
+  const dirtyNodes = walk(dirtyView)
+  const anchors = dirtyNodes.filter((e) => e.type === 'a')
+  const images = dirtyNodes.filter((e) => e.type === 'img')
+  assert.equal(anchors.length, 1, 'anchor rendered')
+  assert.equal(anchors[0].props.href, undefined,
+    'entity-encoded javascript: is decoded by the DOM, then rejected by the whitelist')
+  assert.equal(images.length, 1, 'img rendered')
+  assert.equal(images[0].props.src, undefined, 'data:text/html rejected')
+  assert.equal(anchors[0].props.class, undefined, 'class never leaked as a raw prop')
+  assert.ok(typesOf(dirtyView).includes('b'), 'benign tag kept')
+  assert.ok(!typesOf(dirtyView).includes('script'), 'script kept out')
+}
 
 // ── colorOf ────────────────────────────────────────────────────────────
 
@@ -318,52 +456,17 @@ assert.ok(colorOf('Alice Thornwood') !== colorOf('Bob Ironfist'), 'different nam
 
 // ── 渲染冒烟:气泡文本必须经 MarkdownText 渲染 ─────────────────────────
 
-const MARKDOWN_STUB = function MarkdownText() {}
-const renderReact = {
-  createElement: (type, props, ...children) => ({ type, props, children }),
-  Fragment: Symbol.for('react.fragment'),
-  useState: (init) => [init, () => {}],
-  memo: (fn) => fn,
-}
-const rmod = registration.factory((spec) => {
-  if (spec === 'react') return renderReact
-  if (spec === '@deepseek-ai/dsh-client-ui-primitives') return { MarkdownText: MARKDOWN_STUB }
-  throw new Error(`unexpected require: ${spec}`)
-})
-
-function collectMarkdown(el, out = [], depth = 0) {
-  if (el === null || el === undefined || typeof el !== 'object' || depth > 12) return out
-  if (Array.isArray(el)) {
-    for (const item of el) collectMarkdown(item, out, depth + 1)
-    return out
-  }
-  if (el.type === MARKDOWN_STUB) {
-    out.push(el.props)
-    return out
-  }
-  // 展开自定义组件(测试桩不执行真实 react,函数组件直接调用取子树)
-  let { children } = el
-  if (typeof el.type === 'function') children = [el.type(el.props)]
-  for (const child of children ?? []) collectMarkdown(child, out, depth + 1)
-  return out
-}
-
-const nodeOf = (status, text) => ({
-  node: { data: { blocks: [{ kind: 'text', text }], status } },
-  renderMessageImages: () => null,
-})
-
-// settled + 角色格式:叙述与角色气泡的正文都应为 MarkdownText 元素
-const settledView = rmod.__test.BubbleAssistantNodeView(nodeOf('settled', full))
-const settledMd = collectMarkdown(settledView)
+const settledView = rmod.__test.BubbleAssistantNodeView(
+  { node: { data: { blocks: [{ kind: 'text', text: full }], status: 'settled' } }, renderMessageImages: () => null })
+const settledMd = markdownProps(settledView)
 assert.ok(settledMd.length >= 3, 'narrator + 2 character bubbles all render markdown')
 assert.ok(settledMd.every((p) => p.streaming !== true), 'settled markdown must not be in streaming mode')
 assert.ok(settledMd.some((p) => p.text.includes('小酒馆')), 'narrator text routed through MarkdownText')
 assert.ok(settledMd.some((p) => p.text.includes('升华')), 'character text routed through MarkdownText')
 
-// running:流式 markdown
-const runningView = rmod.__test.BubbleAssistantNodeView(nodeOf('running', '流式中的 **加粗** 文本'))
-const runningMd = collectMarkdown(runningView)
+const runningView = rmod.__test.BubbleAssistantNodeView(
+  { node: { data: { blocks: [{ kind: 'text', text: '流式中的 **加粗** 文本' }], status: 'running' } }, renderMessageImages: () => null })
+const runningMd = markdownProps(runningView)
 assert.ok(runningMd.length >= 1, 'streaming text renders markdown')
 assert.ok(runningMd.every((p) => p.streaming === true), 'running markdown must be in streaming mode')
 
@@ -372,28 +475,4 @@ assert.equal(rmod.__test.codeLabelsOf(undefined), undefined)
 const tStub = (key) => `t:${key}`
 assert.deepEqual(rmod.__test.codeLabelsOf(tStub), { copyLabel: 't:copy', copiedLabel: 't:copied' })
 
-// 17. 渲染冒烟:settled 消息中的面板经 dangerouslySetInnerHTML 输出;流式期间不启用
-function collectHtml(el, out = [], depth = 0) {
-  if (el === null || el === undefined || typeof el !== 'object' || depth > 14) return out
-  if (Array.isArray(el)) {
-    for (const item of el) collectHtml(item, out, depth + 1)
-    return out
-  }
-  if (el.props && el.props.dangerouslySetInnerHTML) out.push(el.props.dangerouslySetInnerHTML.__html)
-  let { children } = el
-  if (typeof el.type === 'function') children = [el.type(el.props)]
-  for (const child of children ?? []) collectHtml(child, out, depth + 1)
-  return out
-}
-const settledHtmlView = rmod.__test.BubbleAssistantNodeView(nodeOf('settled', statusHtml))
-const htmlOut = collectHtml(settledHtmlView)
-assert.ok(htmlOut.length >= 1, 'settled view must emit an html panel')
-assert.ok(htmlOut[0].includes('<details>') && htmlOut[0].includes('</details>'), 'panel rendered via innerHTML')
-const settledHtmlMd = collectMarkdown(settledHtmlView)
-assert.ok(settledHtmlMd.length >= 2, 'markdown text parts still rendered alongside html')
-assert.ok(settledHtmlMd.some((p) => p.text.includes('你坐在床边')), 'leading markdown intact')
-const runningHtmlView = rmod.__test.BubbleAssistantNodeView(nodeOf('running', statusHtml))
-assert.equal(collectHtml(runningHtmlView).length, 0, 'streaming view must not emit html panels yet')
-assert.ok(collectMarkdown(runningHtmlView).every((p) => p.streaming === true), 'streaming stays single markdown stream')
-
-console.log('✅ all rpchar-bubbles parse/color tests passed')
+console.log('✅ all rpchar-bubbles tests passed')

@@ -1,6 +1,6 @@
 {
   "name": "rpchar-bubbles",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "description": "多角色扮演独立气泡 UI:把 narrator 的 🎭 分角色回复渲染为各自独立的聊天气泡",
   "author": "mqnu00",
@@ -26,5 +26,8 @@
   "license": "MIT",
   "peerDependencies": {
     "react": "*"
+  },
+  "devDependencies": {
+    "jsdom": "^30.0.1"
   }
 }
