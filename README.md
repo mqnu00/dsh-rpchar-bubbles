@@ -97,6 +97,7 @@ node tools/inspect-render.mjs - --raw < 某段回复.txt
 
 ## 版本
 
+- `v0.1.7` — **dsh 0.2 适配**:认识 `groupPart` 分流——0.2 会把同一步渲染两次(`reasoning` 进过程区 / `response` 进回答区),现在 `reasoning` 只画 Think 行、`response` 只画正文并照常按 🎭 拆分;中断标记与 0.2 核心同条件,修复同一步被整段渲染两遍的重复气泡。
 - `v0.1.6` — **markdown + HTML 双模**:HTML 解析交给浏览器(`<template>`),元素变白名单 React 元素、
   元素内文本回 `MarkdownText`;删掉正则净化与 HTML 注入;修旁白段空行丢失;HTML 占位符先于 `parseSegments`
   (面板不再被正文里的 `---`/`🎭` 撕裂);面板正文 dedent;抄酒馆 `simpleLineBreaks` 补硬换行。

@@ -470,6 +470,76 @@ const runningMd = markdownProps(runningView)
 assert.ok(runningMd.length >= 1, 'streaming text renders markdown')
 assert.ok(runningMd.every((p) => p.streaming === true), 'running markdown must be in streaming mode')
 
+// ── groupPart 分流(dsh 0.2:同一步按 reasoning/response 发两次渲染事件;
+//    不认识就会把 Think + 正文整段渲染两遍 — 重复气泡回归) ──────────────
+
+const hasThinkRow = (tree) => walk(tree).some((e) => e && e.props && e.props.title === 'Think')
+const mdTexts = (tree) => markdownProps(tree).map((p) => p.text)
+const hasStopped = (tree) =>
+  walk(tree).some((e) => Array.isArray(e.children) && e.children.includes('· 已中断'))
+
+const partNode = {
+  node: { data: { status: 'settled', blocks: [
+    { kind: 'reasoning', text: '内部思考第一行。\n细节。' },
+    { kind: 'text', text: '给用户的正文。' },
+  ] } },
+  renderMessageImages: () => null,
+}
+
+// 31. reasoning 分流:只出 Think 行,不出正文
+const reasoningPart = rmod.__test.BubbleAssistantNodeView({ ...partNode, groupPart: 'reasoning' })
+assert.ok(hasThinkRow(reasoningPart), 'reasoning part renders the Think row')
+assert.ok(!mdTexts(reasoningPart).some((t) => t.includes('给用户的正文')),
+  'reasoning part must not render reply text')
+
+// 32. response 分流:只出正文,不出 Think(重复气泡的直接回归点)
+const responsePart = rmod.__test.BubbleAssistantNodeView({ ...partNode, groupPart: 'response' })
+assert.ok(!hasThinkRow(responsePart), 'response part must not render the Think row (duplicate fix)')
+assert.ok(mdTexts(responsePart).some((t) => t.includes('给用户的正文')),
+  'response part renders reply text')
+
+// 33. 无 groupPart:保持旧行为(Think + 正文都在),兼容老版运行时
+const unparted = rmod.__test.BubbleAssistantNodeView(partNode)
+assert.ok(hasThinkRow(unparted) && mdTexts(unparted).some((t) => t.includes('给用户的正文')),
+  'no groupPart keeps the legacy full rendering')
+
+// 34. 仅有 reasoning 的步:response 分流不出空气泡,reasoning 分流仍出 Think
+const reasoningOnly = {
+  node: { data: { status: 'settled', blocks: [{ kind: 'reasoning', text: '只思考。' }] } },
+  renderMessageImages: () => null,
+}
+assert.equal(rmod.__test.BubbleAssistantNodeView({ ...reasoningOnly, groupPart: 'response' }), null,
+  'response part of a reasoning-only step renders nothing')
+assert.ok(rmod.__test.BubbleAssistantNodeView({ ...reasoningOnly, groupPart: 'reasoning' }) !== null,
+  'reasoning part of a reasoning-only step still renders the Think row')
+
+// 35. running 分流:reasoning 流出 Think 行,response 流不含 Think 且保留流式正文
+const runParts = {
+  node: { data: { status: 'running', blocks: [
+    { kind: 'reasoning', text: '边想' },
+    { kind: 'text', text: '边说' },
+  ] } },
+  renderMessageImages: () => null,
+}
+assert.ok(hasThinkRow(rmod.__test.BubbleAssistantNodeView({ ...runParts, groupPart: 'reasoning' })),
+  'running reasoning part shows the Think row')
+const runResponse = rmod.__test.BubbleAssistantNodeView({ ...runParts, groupPart: 'response' })
+assert.ok(!hasThinkRow(runResponse), 'running response part hides the Think row')
+assert.ok(mdTexts(runResponse).some((t) => t.includes('边说')), 'running response part keeps streaming text')
+
+// 36. 中断标记只出现一次:reasoning 分流不重复,response 分流保留
+const interruptedParts = {
+  node: { data: { status: 'interrupted', blocks: [
+    { kind: 'reasoning', text: '想' },
+    { kind: 'text', text: '说' },
+  ] } },
+  renderMessageImages: () => null,
+}
+assert.ok(!hasStopped(rmod.__test.BubbleAssistantNodeView({ ...interruptedParts, groupPart: 'reasoning' })),
+  'reasoning part must not repeat the interrupted marker')
+assert.ok(hasStopped(rmod.__test.BubbleAssistantNodeView({ ...interruptedParts, groupPart: 'response' })),
+  'response part keeps the interrupted marker')
+
 // t 缺席:codeLabels 允许为 undefined(组件内部有默认文案)
 assert.equal(rmod.__test.codeLabelsOf(undefined), undefined)
 const tStub = (key) => `t:${key}`
