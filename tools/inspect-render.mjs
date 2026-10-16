@@ -78,11 +78,12 @@ const view = mod.__test.BubbleAssistantNodeView({
 
 const tags = []
 const markdownTexts = []
+const markdownProps = []
 
 ;(function collect(el, depth = 0) {
   if (el === null || el === undefined || typeof el !== 'object' || depth > 32) return
   if (Array.isArray(el)) { for (const item of el) collect(item, depth); return }
-  if (el.type === MARKDOWN_STUB) { markdownTexts.push(String(el.props.text)); return }
+  if (el.type === MARKDOWN_STUB) { markdownProps.push(el.props); markdownTexts.push(String(el.props.text)); return }
   if (typeof el.type === 'function') { collect(el.type(el.props), depth + 1); return }
   if (el.type !== react.Fragment) tags.push(String(el.type))
   for (const child of el.children ?? []) collect(child, depth + 1)
@@ -116,5 +117,11 @@ const dangerous = ['script', 'style', 'iframe', 'object', 'embed', 'form', 'butt
 console.log('元素种类            :', [...new Set(tags)].join(', ') || '(无)')
 console.log('危险元素            :', tags.filter((t) => dangerous.includes(t)).join(', ') || '无')
 console.log('markdown 片段数      :', markdownTexts.length)
+// dsh 0.2 的 MarkdownText 只认必填的 `labels`(0.1 的 `codeLabels` 已删除):
+// 少了它,正文里任何 ``` 围栏都会在 `labels.code.copyLabel` 上抛 TypeError,
+// 整个 slot entry 崩掉 —— 现象是"这条回复没有气泡"。
+const brokenLabels = markdownProps.filter((p) =>
+  !p.labels || !p.labels.code || typeof p.labels.code.copyLabel !== 'string' || typeof p.labels.footnotes !== 'string')
+console.log('MarkdownText labels :', brokenLabels.length === 0 ? '完整(0.2 形状)' : `⚠️ ${brokenLabels.length} 处缺失 → 渲染会崩`)
 console.log('尖括号源码漏进 markdown:', markdownTexts.some((t) => /<\/?[a-z][a-z0-9-]*(\s|>|\/)/i.test(t)) ? '⚠️ 有' : '无')
 console.log('占位符漏出          :', markdownTexts.some((t) => t.includes('\uE000RPH')) ? '⚠️ 有' : '无')

@@ -8,7 +8,7 @@ DSH Web 客户端插件:把多角色扮演(narrator)的回复渲染成**每个�
 
 - 以 `priority: -1` 影子覆盖 `conversation.chat.node` slot 的 `assistant-step` 键(核心渲染器为默认优先级 0;同一键位最低优先级者生效,这是客户端 slot 的官方行为)。
 - 流式(running)阶段渲染为单个气泡的流式 markdown,避免流式拼接闪烁;定型(settled)后按角色分隔格式拆分为多个气泡。
-- 气泡文本(叙述/角色对话/降级气泡)一律经基座播种的 `MarkdownText`(`@deepseek-ai/dsh-client-ui-primitives`,与核心聊天同款)渲染,markdown 显示为渲染结果而非原文;代码块复制按钮文案跟随 `t` 标准 seat,缺席时用组件默认文案。
+- 气泡文本(叙述/角色对话/降级气泡)一律经基座播种的 `MarkdownText`(`@deepseek-ai/dsh-client-ui-primitives`,与核心聊天同款)渲染,markdown 显示为渲染结果而非原文;代码块复制按钮/脚注文案按 `t` 席位拼成 **dsh 0.2 的 `labels`**(`{code: {copyLabel, copiedLabel, toolbarLabels}, footnotes}`)传给 `MarkdownText`,并按 `t` 缓存引用 —— `t` 席位缺席时落回同一套英文默认值,永不返回 `undefined`。
 - 酒馆式 **markdown + HTML 双模**渲染(定型后):气泡文本里的 HTML 由**浏览器自己的解析器**解析
   (`document.createElement('template')` + `innerHTML`,不 attach 到文档 → 不执行脚本、不加载资源),
   再映射成**白名单 React 元素**;元素内部的文本**回到 `MarkdownText`** —— 于是 `<details>` 是真折叠面板、
@@ -97,6 +97,7 @@ node tools/inspect-render.mjs - --raw < 某段回复.txt
 
 ## 版本
 
+- `v0.1.8` — **修复"有代码块的回复完全没有气泡"**:dsh 0.2 把 `MarkdownText` 的 props 从 `codeLabels` 改成了必填的 `labels`(`{code: {copyLabel, copiedLabel, toolbarLabels}, footnotes}`),旧名字传进去等于 `labels` 缺席,正文里只要出现 ``` 围栏,核心渲染器就会在 `labels.code.copyLabel` 上抛 `TypeError`,整个 `conversation.chat.node` slot entry 崩掉 → 该条回复退回核心渲染(没有气泡)。现在按 `t` 席位拼完整 `labels` 并缓存引用(`t` 缺席时用同款英文默认值,逐键兜底),单测与 `tools/inspect-render.mjs` 都加了"labels 必须完整"的守卫。
 - `v0.1.7` — **dsh 0.2 适配**:认识 `groupPart` 分流——0.2 会把同一步渲染两次(`reasoning` 进过程区 / `response` 进回答区),现在 `reasoning` 只画 Think 行、`response` 只画正文并照常按 🎭 拆分;中断标记与 0.2 核心同条件,修复同一步被整段渲染两遍的重复气泡。
 - `v0.1.6` — **markdown + HTML 双模**:HTML 解析交给浏览器(`<template>`),元素变白名单 React 元素、
   元素内文本回 `MarkdownText`;删掉正则净化与 HTML 注入;修旁白段空行丢失;HTML 占位符先于 `parseSegments`

@@ -287,7 +287,7 @@ function walk(el, out = [], depth = 0) {
 }
 const typesOf = (tree) => walk(tree).map((e) => e.type)
 const markdownProps = (tree) => walk(tree).filter((e) => e.type === MARKDOWN_STUB).map((e) => e.props)
-const ctx = { codeLabels: undefined, streaming: false }
+const ctx = { labels: rmod.__test.markdownLabelsOf(undefined), streaming: false }
 // 渲染相关挂点必须取自 rmod(接真实桩的那份):mod 的 react 桩只返回字符串。
 const { renderElement, renderInline } = rmod.__test
 
@@ -470,6 +470,30 @@ const runningMd = markdownProps(runningView)
 assert.ok(runningMd.length >= 1, 'streaming text renders markdown')
 assert.ok(runningMd.every((p) => p.streaming === true), 'running markdown must be in streaming mode')
 
+// ── 交给基座 MarkdownText 的 props 必须是 dsh 0.2 的 `labels` ────────────
+// 0.1 → 0.2 是破坏性改名:`MarkdownText` 的 props 从 `codeLabels` 换成必填的
+// `labels`({code: {copyLabel, copiedLabel, toolbarLabels}, footnotes}),内部渲染
+// 围栏时直接读 `labels.code.copyLabel`。传错名字 → 只要正文里出现 ``` 围栏就抛
+// TypeError,整个 slot entry 崩掉,表现正是"这条回复没有气泡"(线上复现事故)。
+const allMd = settledMd.concat(runningMd)
+assert.ok(allMd.every((p) => p.codeLabels === undefined),
+  'must not pass the removed dsh 0.1 prop `codeLabels`')
+for (const props of allMd) {
+  assert.ok(props.labels && props.labels.code,
+    'MarkdownText requires `labels` (dsh 0.2 renamed it from codeLabels)')
+  assert.equal(typeof props.labels.code.copyLabel, 'string', 'labels.code.copyLabel must be a string')
+  assert.equal(typeof props.labels.code.copiedLabel, 'string', 'labels.code.copiedLabel must be a string')
+  assert.equal(typeof props.labels.footnotes, 'string', 'labels.footnotes must be a string')
+}
+
+// 围栏端到端:含 ``` 围栏的回复也要照常走 MarkdownText(修复前这条会崩)
+const fencedView = rmod.__test.BubbleAssistantNodeView({
+  node: { data: { status: 'settled', blocks: [{ kind: 'text', text: '看:\n\n```json\n{"a":1}\n```\n' }] } },
+  renderMessageImages: () => null,
+})
+assert.ok(markdownProps(fencedView).some((p) => p.text.includes('{"a":1}')),
+  'fenced code still routed to MarkdownText')
+
 // ── groupPart 分流(dsh 0.2:同一步按 reasoning/response 发两次渲染事件;
 //    不认识就会把 Think + 正文整段渲染两遍 — 重复气泡回归) ──────────────
 
@@ -540,9 +564,29 @@ assert.ok(!hasStopped(rmod.__test.BubbleAssistantNodeView({ ...interruptedParts,
 assert.ok(hasStopped(rmod.__test.BubbleAssistantNodeView({ ...interruptedParts, groupPart: 'response' })),
   'response part keeps the interrupted marker')
 
-// t 缺席:codeLabels 允许为 undefined(组件内部有默认文案)
-assert.equal(rmod.__test.codeLabelsOf(undefined), undefined)
+// t 席位 → labels(dsh 0.2 的 6 个键,与核心 markdownLabels(t) 同构)
+const fallbackLabels = rmod.__test.markdownLabelsOf(undefined)
+assert.ok(fallbackLabels.code && typeof fallbackLabels.code.copyLabel === 'string',
+  't 缺席时必须回退到完整英文默认值,绝不返回 undefined(少一个键 = 围栏渲染崩溃)')
+assert.equal(typeof fallbackLabels.footnotes, 'string')
 const tStub = (key) => `t:${key}`
-assert.deepEqual(rmod.__test.codeLabelsOf(tStub), { copyLabel: 't:copy', copiedLabel: 't:copied' })
+const tLabels = rmod.__test.markdownLabelsOf(tStub)
+assert.deepEqual(tLabels, {
+  code: {
+    copyLabel: 't:copy',
+    copiedLabel: 't:copied',
+    toolbarLabels: {
+      codeLabel: 't:codeBlock.title',
+      wrapLabel: 't:codeBlock.wrap',
+      unwrapLabel: 't:codeBlock.unwrap',
+    },
+  },
+  footnotes: 't:markdown.footnotes',
+})
+assert.equal(rmod.__test.markdownLabelsOf(tStub), tLabels,
+  'labels 必须按 t 席位缓存(身份稳定,否则 MarkdownText 流式缓存每帧作废)')
+const partialLabels = rmod.__test.markdownLabelsOf((key) => (key === 'copy' ? '拷贝' : undefined))
+assert.equal(partialLabels.code.copyLabel, '拷贝', 't 有值时用 t')
+assert.equal(partialLabels.code.copiedLabel, 'Copied', 't 返回空值时逐键落回默认文案')
 
 console.log('✅ all rpchar-bubbles tests passed')
